@@ -5,7 +5,7 @@
 <h1 style="font-family: 'Vazirmatn', sans-serif;">📈 آخرین قیمت دلار و نفت</h1>
 
 <p style="font-family: 'Vazirmatn', sans-serif; font-size: 14px; color: #555;">
-⏱ بروزرسانی خودکار هر ۳۰ دقیقه | آخرین بروزرسانی: <b>۰۸:۱۴</b>
+⏱ بروزرسانی خودکار هر ۳۰ دقیقه | آخرین بروزرسانی: <b>۱۲:۳۱ (به وقت تهران)</b>
 </p>
 
 ---
@@ -20,11 +20,11 @@
   <tbody>
     <tr>
       <td style="padding: 12px 24px;">💵 <b>دلار آمریکا (آزاد)</b></td>
-      <td style="padding: 12px 24px; color: #16a34a; font-weight: bold;">۲۷۱،۷۰۶ تومان</td>
+      <td style="padding: 12px 24px; color: #16a34a; font-weight: bold;">۲۷۰،۶۸۵ تومان</td>
     </tr>
     <tr>
       <td style="padding: 12px 24px;">🛢️ <b>نفت خام اوپک / برنت</b></td>
-      <td style="padding: 12px 24px; color: #2563eb; font-weight: bold;">۸۸.۴۵ دلار</td>
+      <td style="padding: 12px 24px; color: #2563eb; font-weight: bold;">۸۸.۱۰ دلار</td>
     </tr>
   </tbody>
 </table>
