@@ -32,12 +32,47 @@ jobs:
       - name: Run fetch script and generate outputs
         run: python fetch_rates.py
 
+      - name: Send rates to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.A5HKAN_CURRENCY_BOT }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import requests
+
+          with open("market.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          message = (
+              "💵 قیمت دلار آزاد\n\n"
+              f"{data['usd']} تومان\n\n"
+              "🛢️ نفت برنت\n"
+              f"{data['oil']} دلار\n\n"
+              f"🕐 آخرین بروزرسانی: {data['updated']}"
+          )
+
+          url = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage"
+
+          response = requests.post(
+              url,
+              data={
+                  "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+                  "text": message,
+              },
+              timeout=30,
+          )
+
+          response.raise_for_status()
+          print("Telegram message sent successfully.")
+
       - name: Commit and push changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add market.json api/history.json usd_chart.png README.md
-          
+
           if git diff --staged --quiet; then
             echo "No changes to commit."
           else
