@@ -1,7 +1,9 @@
-name: Fetch Market Rates & Generate Chart
+name: Fetch Market Rates & Update API
 
 on:
-  workflow_dispatch: # Trigger manually
+  schedule:
+    - cron: '*/30 * * * *' # Runs every 30 minutes
+  workflow_dispatch:      # Allows manual run from Actions tab
 
 permissions:
   contents: write
@@ -24,18 +26,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 lxml cloudscraper matplotlib
 
-      - name: Run script
+      - name: Run fetch script and generate outputs
         run: python fetch_rates.py
 
       - name: Commit and push changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add market.json usd_chart.png
-
+          git add market.json api/history.json usd_chart.png README.md
+          
           if git diff --staged --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "chore: update market.json and chart"
+            git commit -m "chore(auto): update rates, API history and chart [skip ci]"
             git push
           fi
