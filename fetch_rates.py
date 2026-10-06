@@ -1,13 +1,16 @@
 import json
+import os
 import re
 import time
 from datetime import datetime
+import urllib.request
 import requests
 from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from matplotlib import font_manager
 
-# Use cloudscraper to prevent Cloudflare blocks if installed
+# Bypass protection if available
 try:
     import cloudscraper
     session = cloudscraper.create_scraper()
@@ -23,11 +26,35 @@ except ImportError:
     })
 
 
+def to_persian_digits(num_str: str) -> str:
+    """Converts English digits in a string to Persian digits."""
+    persian_digits = {
+        "0": "۰", "1": "۱", "2": "۲", "3": "۳", "4": "۴",
+        "5": "۵", "6": "۶", "7": "۷", "8": "۸", "9": "۹", ",": "،"
+    }
+    return "".join(persian_digits.get(char, char) for char in str(num_str))
+
+
+def ensure_vazirmatn_font():
+    """Downloads Vazirmatn font if not present and returns the font property."""
+    font_path = "Vazirmatn-Bold.ttf"
+    if not os.path.exists(font_path):
+        url = "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Bold.ttf"
+        try:
+            print("Downloading Vazirmatn font...")
+            urllib.request.urlretrieve(url, font_path)
+        except Exception as e:
+            print(f"Failed to download Vazirmatn: {e}")
+            return None
+
+    if os.path.exists(font_path):
+        font_manager.fontManager.addfont(font_path)
+        return font_manager.FontProperties(fname=font_path)
+    return None
+
+
 def extract_js_array(html_text: str, var_name: str):
-    """
-    Extracts JSON arrays defined as JavaScript variables from page scripts.
-    e.g.: const fullPriceData = [...]; or let fullPriceData = [...];
-    """
+    """Extracts JSON array embedded in JavaScript script tags."""
     pattern = r"(?:const|let|var)\s+" + re.escape(var_name) + r"\s*=\s*(\[\s*\{.*?\}\]\s*);"
     match = re.search(pattern, html_text, re.DOTALL)
     if match:
@@ -38,87 +65,195 @@ def extract_js_array(html_text: str, var_name: str):
     return []
 
 
-def generate_usd_chart(aed_irr_data, aed_usd_data, output_file="usd_chart.png", days_limit=180):
+def update_history_api(aed_irr_history, aed_usd_history, live_usd_toman, api_dir="api"):
     """
-    Aligns AED/IRR and AED/USD by day, calculates USD/Toman, and draws the chart.
+    Maintains a persistent api/history.json file.
+    - Seeds full history on first run from page scripts.
+    - On future runs, loads the existing history and updates/appends the latest price.
     """
-    if not aed_irr_data:
-        print("No historical AED/IRR data found.")
+    os.makedirs(api_dir, exist_ok=True)
+    api_file = os.path.join(api_dir, "history.json")
+
+    history_map = {}
+
+    # 1. Load existing historical API data if it already exists
+    if os.path.exists(api_file):
+        try:
+            with open(api_file, "r", encoding="utf-8") as f:
+                existing_data = json.load(f)
+                for item in existing_data.get("history", []):
+                    history_map[item["date"]] = item
+        except Exception as e:
+            print(f"Warning: could not read existing api/history.json: {e}")
+
+    # 2. If existing data is empty, bootstrap with website's historical points
+    if not history_map and aed_irr_history:
+        print("Bootstrapping historical database from website chart data...")
+        usd_rate_by_date = {}
+        for item in aed_usd_history:
+            d = datetime.fromtimestamp(item["timestamp"]).strftime("%Y-%m-%d")
+            usd_rate_by_date[d] = item["rate"]
+
+        for item in aed_irr_history:
+            dt = datetime.fromtimestamp(item["timestamp"])
+            d_str = dt.strftime("%Y-%m-%d")
+            aed_toman = item["price"] / 10.0
+            aed_usd = usd_rate_by_date.get(d_str, 0.272257)
+
+            if aed_usd > 0:
+                calc_usd_toman = int(round(aed_toman / aed_usd))
+                history_map[d_str] = {
+                    "timestamp": item["timestamp"],
+                    "date": d_str,
+                    "price_toman": calc_usd_toman,
+                    "price_irr": calc_usd_toman * 10
+                }
+
+    # 3. Update/append today's live rate
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    current_ts = int(now.timestamp())
+
+    if live_usd_toman is not None:
+        history_map[today_str] = {
+            "timestamp": current_ts,
+            "date": today_str,
+            "price_toman": live_usd_toman,
+            "price_irr": live_usd_toman * 10
+        }
+
+    # Sort sequentially by date
+    sorted_history = [history_map[k] for k in sorted(history_map.keys())]
+
+    api_payload = {
+        "symbol": "USD/TOMAN",
+        "base_currency": "USD",
+        "target_currency": "TOMAN",
+        "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "total_records": len(sorted_history),
+        "latest": sorted_history[-1] if sorted_history else None,
+        "history": sorted_history
+    }
+
+    with open(api_file, "w", encoding="utf-8") as f:
+        json.dump(api_payload, f, ensure_ascii=False, indent=2)
+
+    print(f"API data successfully saved to {api_file} ({len(sorted_history)} records).")
+    return sorted_history
+
+
+def generate_usd_chart(history_records, output_file="usd_chart.png", days_limit=180):
+    if not history_records:
+        print("No historical points available for chart.")
         return
 
-    # Build a lookup dictionary for AED to USD rates: {YYYY-MM-DD: aed_usd_rate}
-    usd_rate_by_date = {}
-    for item in aed_usd_data:
-        d = datetime.fromtimestamp(item["timestamp"]).strftime("%Y-%m-%d")
-        usd_rate_by_date[d] = item["rate"]
+    vazir_prop = ensure_vazirmatn_font()
 
-    chart_dates = []
-    usd_toman_prices = []
+    records = history_records[-days_limit:] if days_limit else history_records
 
-    # Calculate USD/Toman for each point
-    for item in aed_irr_data:
-        ts = item["timestamp"]
-        dt = datetime.fromtimestamp(ts)
-        d_str = dt.strftime("%Y-%m-%d")
+    chart_dates = [datetime.strptime(item["date"], "%Y-%m-%d") for item in records]
+    usd_toman_prices = [item["price_toman"] for item in records]
 
-        aed_irr = item["price"]
-        aed_toman = aed_irr / 10.0  # 1 Toman = 10 IRR
-
-        # Get AED -> USD rate for this day; default to standard peg 1 / 3.6725 (~0.27229)
-        aed_usd = usd_rate_by_date.get(d_str, 0.272257)
-
-        if aed_usd > 0:
-            usd_toman = int(round(aed_toman / aed_usd))
-            chart_dates.append(dt)
-            usd_toman_prices.append(usd_toman)
-
-    if not chart_dates:
-        print("Could not compute any USD/Toman historical points.")
-        return
-
-    # Keep the most recent N days for a clean, readable chart (e.g., last 6 months / 180 days)
-    if days_limit and len(chart_dates) > days_limit:
-        chart_dates = chart_dates[-days_limit:]
-        usd_toman_prices = usd_toman_prices[-days_limit:]
-
-    # Plot styling
     plt.style.use("seaborn-v0_8-whitegrid" if "seaborn-v0_8-whitegrid" in plt.style.available else "default")
     fig, ax = plt.subplots(figsize=(11, 5), dpi=150)
 
-    # Plot line and fill area
-    ax.plot(chart_dates, usd_toman_prices, color="#2563eb", linewidth=2.2, label="USD / Toman")
+    # Plot line & fill area
+    ax.plot(chart_dates, usd_toman_prices, color="#2563eb", linewidth=2.3)
     ax.fill_between(chart_dates, usd_toman_prices, color="#3b82f6", alpha=0.15)
 
     # Annotate latest value
     latest_date = chart_dates[-1]
     latest_price = usd_toman_prices[-1]
+    formatted_price = to_persian_digits(f"{latest_price:,}")
+
     ax.plot(latest_date, latest_price, marker="o", markersize=6, color="#1d4ed8")
     ax.annotate(
-        f"Latest: {latest_price:,} Toman",
+        f"{formatted_price} تومان",
         xy=(latest_date, latest_price),
-        xytext=(-80, 15),
+        xytext=(-95, 15),
         textcoords="offset points",
-        fontweight="bold",
-        fontsize=9,
+        fontproperties=vazir_prop,
+        fontsize=10,
         color="#1e3a8a",
         bbox=dict(boxstyle="round,pad=0.4", fc="#dbeafe", ec="#3b82f6", lw=1),
         arrowprops=dict(arrowstyle="->", color="#3b82f6", lw=1)
     )
 
-    # Axes formatting
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y/%m"))
     ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f"{int(x):,}"))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: to_persian_digits(f"{int(x):,}")))
 
-    ax.set_title("USD to Toman Exchange Rate Trend (Calculated via Dubai AED)", fontsize=13, fontweight="bold", pad=15)
-    ax.set_xlabel("Date", fontsize=10, labelpad=10)
-    ax.set_ylabel("Price (Toman)", fontsize=10, labelpad=10)
+    if vazir_prop:
+        for label in ax.get_xticklabels() + ax.get_yticklabels():
+            label.set_fontproperties(vazir_prop)
+
+    ax.set_title("نمودار قیمت دلار به تومان (محاسبه از نرخ درهم امارات)", fontproperties=vazir_prop, fontsize=13, pad=15)
+    ax.set_xlabel("تاریخ", fontproperties=vazir_prop, fontsize=10, labelpad=10)
+    ax.set_ylabel("قیمت (تومان)", fontproperties=vazir_prop, fontsize=10, labelpad=10)
     ax.grid(True, linestyle="--", alpha=0.5)
 
     plt.tight_layout()
     plt.savefig(output_file, dpi=150)
     plt.close()
-    print(f"Chart successfully saved to {output_file}")
+    print(f"Chart saved to {output_file}")
+
+
+def update_readme(market_data):
+    """Generates a Persian README.md styled with Vazirmatn font."""
+    usd_persian = to_persian_digits(market_data.get("usd", "نامشخص"))
+    oil_persian = to_persian_digits(market_data.get("oil", "نامشخص"))
+    updated_persian = to_persian_digits(market_data.get("updated", "--:--"))
+
+    readme_content = f"""<div dir="rtl" align="center">
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
+
+<h1 style="font-family: 'Vazirmatn', sans-serif;">📈 آخرین قیمت دلار و نفت</h1>
+
+<p style="font-family: 'Vazirmatn', sans-serif; font-size: 14px; color: #555;">
+⏱ بروزرسانی خودکار هر ۳۰ دقیقه | آخرین بروزرسانی: <b>{updated_persian}</b>
+</p>
+
+---
+
+<table style="font-family: 'Vazirmatn', sans-serif; font-size: 16px; border-collapse: collapse;">
+  <thead>
+    <tr style="background-color: #f3f4f6;">
+      <th style="padding: 12px 24px;">شاخص</th>
+      <th style="padding: 12px 24px;">قیمت لحظه‌ای</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding: 12px 24px;">💵 <b>دلار آمریکا (آزاد)</b></td>
+      <td style="padding: 12px 24px; color: #16a34a; font-weight: bold;">{usd_persian} تومان</td>
+    </tr>
+    <tr>
+      <td style="padding: 12px 24px;">🛢️ <b>نفت خام اوپک / برنت</b></td>
+      <td style="padding: 12px 24px; color: #2563eb; font-weight: bold;">{oil_persian} دلار</td>
+    </tr>
+  </tbody>
+</table>
+
+---
+
+<h2 style="font-family: 'Vazirmatn', sans-serif; margin-top: 25px;">📊 روند ۶ ماهه قیمت دلار</h2>
+
+<img src="usd_chart.png?raw=true" alt="نمودار قیمت دلار" width="95%" style="border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);" />
+
+---
+
+<h3 style="font-family: 'Vazirmatn', sans-serif; margin-top: 25px;">🌐 وب‌سرویس و API تاریخچه</h3>
+
+<p style="font-family: 'Vazirmatn', sans-serif; font-size: 14px; color: #444;" dir="ltr">
+JSON Endpoint: <code>api/history.json</code>
+</p>
+
+</div>
+"""
+    with open("README.md", "w", encoding="utf-8") as f:
+        f.write(readme_content)
+    print("README.md updated.")
 
 
 def main():
@@ -141,7 +276,8 @@ def main():
     if resp_usd.status_code == 200:
         aed_usd_history = extract_js_array(resp_usd.text, "fullPriceData")
 
-    # 1. Calculate live rate for market.json
+    # 1. Compute Live Rate
+    live_usd_toman = None
     try:
         soup_usd = BeautifulSoup(resp_usd.text, "lxml")
         soup_aed = BeautifulSoup(resp_aed.text, "lxml")
@@ -159,7 +295,7 @@ def main():
     except Exception as e:
         print(f"Error computing live USD rate: {e}")
 
-    # 2. Fetch live Oil price
+    # 2. Live Oil Price
     try:
         resp_oil = session.get("https://oilprice.com/oil-price-charts/46", timeout=15)
         if resp_oil.status_code == 200:
@@ -172,13 +308,18 @@ def main():
 
     market_data["updated"] = time.strftime("%H:%M")
 
-    # 3. Save market.json
+    # 3. Save market.json (live rate)
     with open("market.json", "w", encoding="utf-8") as f:
         json.dump(market_data, f, ensure_ascii=False, indent=2)
-    print("market.json saved:", market_data)
 
-    # 4. Generate USD/Toman chart from the extracted website chart arrays
-    generate_usd_chart(aed_irr_history, aed_usd_history, output_file="usd_chart.png", days_limit=180)
+    # 4. Update the Persistent History API (api/history.json)
+    history_records = update_history_api(aed_irr_history, aed_usd_history, live_usd_toman)
+
+    # 5. Generate Chart from history
+    generate_usd_chart(history_records, output_file="usd_chart.png", days_limit=180)
+
+    # 6. Update Persian README.md
+    update_readme(market_data)
 
 
 if __name__ == "__main__":
