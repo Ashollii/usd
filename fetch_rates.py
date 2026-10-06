@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import time
 from datetime import datetime
 import urllib.request
 import requests
@@ -9,6 +8,20 @@ from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib import font_manager
+
+# Ensure Tehran Timezone (UTC+3:30)
+try:
+    from zoneinfo import ZoneInfo
+    TEHRAN_TZ = ZoneInfo("Asia/Tehran")
+except Exception:
+    from datetime import timezone, timedelta
+    TEHRAN_TZ = timezone(timedelta(hours=3, minutes=30))
+
+
+def get_tehran_now() -> datetime:
+    """Returns the current datetime in Asia/Tehran timezone."""
+    return datetime.now(TEHRAN_TZ)
+
 
 # Bypass protection if available
 try:
@@ -67,16 +80,13 @@ def extract_js_array(html_text: str, var_name: str):
 
 def update_history_api(aed_irr_history, aed_usd_history, live_usd_toman, api_dir="api"):
     """
-    Maintains a persistent api/history.json file.
-    - Seeds full history on first run from page scripts.
-    - On future runs, loads the existing history and updates/appends the latest price.
+    Maintains a persistent api/history.json file in Tehran timezone.
     """
     os.makedirs(api_dir, exist_ok=True)
     api_file = os.path.join(api_dir, "history.json")
 
     history_map = {}
 
-    # 1. Load existing historical API data if it already exists
     if os.path.exists(api_file):
         try:
             with open(api_file, "r", encoding="utf-8") as f:
@@ -86,16 +96,16 @@ def update_history_api(aed_irr_history, aed_usd_history, live_usd_toman, api_dir
         except Exception as e:
             print(f"Warning: could not read existing api/history.json: {e}")
 
-    # 2. If existing data is empty, bootstrap with website's historical points
+    # Bootstrap if empty
     if not history_map and aed_irr_history:
         print("Bootstrapping historical database from website chart data...")
         usd_rate_by_date = {}
         for item in aed_usd_history:
-            d = datetime.fromtimestamp(item["timestamp"]).strftime("%Y-%m-%d")
+            d = datetime.fromtimestamp(item["timestamp"], tz=TEHRAN_TZ).strftime("%Y-%m-%d")
             usd_rate_by_date[d] = item["rate"]
 
         for item in aed_irr_history:
-            dt = datetime.fromtimestamp(item["timestamp"])
+            dt = datetime.fromtimestamp(item["timestamp"], tz=TEHRAN_TZ)
             d_str = dt.strftime("%Y-%m-%d")
             aed_toman = item["price"] / 10.0
             aed_usd = usd_rate_by_date.get(d_str, 0.272257)
@@ -109,10 +119,9 @@ def update_history_api(aed_irr_history, aed_usd_history, live_usd_toman, api_dir
                     "price_irr": calc_usd_toman * 10
                 }
 
-    # 3. Update/append today's live rate
-    now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    current_ts = int(now.timestamp())
+    now_tehran = get_tehran_now()
+    today_str = now_tehran.strftime("%Y-%m-%d")
+    current_ts = int(now_tehran.timestamp())
 
     if live_usd_toman is not None:
         history_map[today_str] = {
@@ -122,14 +131,14 @@ def update_history_api(aed_irr_history, aed_usd_history, live_usd_toman, api_dir
             "price_irr": live_usd_toman * 10
         }
 
-    # Sort sequentially by date
     sorted_history = [history_map[k] for k in sorted(history_map.keys())]
 
     api_payload = {
         "symbol": "USD/TOMAN",
         "base_currency": "USD",
         "target_currency": "TOMAN",
-        "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "timezone": "Asia/Tehran",
+        "updated_at": now_tehran.strftime("%Y-%m-%d %H:%M:%S"),
         "total_records": len(sorted_history),
         "latest": sorted_history[-1] if sorted_history else None,
         "history": sorted_history
@@ -138,7 +147,7 @@ def update_history_api(aed_irr_history, aed_usd_history, live_usd_toman, api_dir
     with open(api_file, "w", encoding="utf-8") as f:
         json.dump(api_payload, f, ensure_ascii=False, indent=2)
 
-    print(f"API data successfully saved to {api_file} ({len(sorted_history)} records).")
+    print(f"API data saved to {api_file} ({len(sorted_history)} records).")
     return sorted_history
 
 
@@ -157,11 +166,9 @@ def generate_usd_chart(history_records, output_file="usd_chart.png", days_limit=
     plt.style.use("seaborn-v0_8-whitegrid" if "seaborn-v0_8-whitegrid" in plt.style.available else "default")
     fig, ax = plt.subplots(figsize=(11, 5), dpi=150)
 
-    # Plot line & fill area
     ax.plot(chart_dates, usd_toman_prices, color="#2563eb", linewidth=2.3)
     ax.fill_between(chart_dates, usd_toman_prices, color="#3b82f6", alpha=0.15)
 
-    # Annotate latest value
     latest_date = chart_dates[-1]
     latest_price = usd_toman_prices[-1]
     formatted_price = to_persian_digits(f"{latest_price:,}")
@@ -199,7 +206,7 @@ def generate_usd_chart(history_records, output_file="usd_chart.png", days_limit=
 
 
 def update_readme(market_data):
-    """Generates a Persian README.md styled with Vazirmatn font."""
+    """Generates a Persian README.md with explicit Tehran time."""
     usd_persian = to_persian_digits(market_data.get("usd", "نامشخص"))
     oil_persian = to_persian_digits(market_data.get("oil", "نامشخص"))
     updated_persian = to_persian_digits(market_data.get("updated", "--:--"))
@@ -211,7 +218,7 @@ def update_readme(market_data):
 <h1 style="font-family: 'Vazirmatn', sans-serif;">📈 آخرین قیمت دلار و نفت</h1>
 
 <p style="font-family: 'Vazirmatn', sans-serif; font-size: 14px; color: #555;">
-⏱ بروزرسانی خودکار هر ۳۰ دقیقه | آخرین بروزرسانی: <b>{updated_persian}</b>
+⏱ بروزرسانی خودکار هر ۳۰ دقیقه | آخرین بروزرسانی: <b>{updated_persian} (به وقت تهران)</b>
 </p>
 
 ---
@@ -306,19 +313,21 @@ def main():
     except Exception as e:
         print(f"Error fetching Oil price: {e}")
 
-    market_data["updated"] = time.strftime("%H:%M")
+    # Explicit Tehran Time
+    now_tehran = get_tehran_now()
+    market_data["updated"] = now_tehran.strftime("%H:%M")
 
-    # 3. Save market.json (live rate)
+    # 3. Save market.json
     with open("market.json", "w", encoding="utf-8") as f:
         json.dump(market_data, f, ensure_ascii=False, indent=2)
 
-    # 4. Update the Persistent History API (api/history.json)
+    # 4. Update History API
     history_records = update_history_api(aed_irr_history, aed_usd_history, live_usd_toman)
 
-    # 5. Generate Chart from history
+    # 5. Generate Chart
     generate_usd_chart(history_records, output_file="usd_chart.png", days_limit=180)
 
-    # 6. Update Persian README.md
+    # 6. Update README.md
     update_readme(market_data)
 
 
