@@ -28,7 +28,7 @@ def extract_js_array(html_text: str, var_name: str):
     Extracts JSON arrays defined as JavaScript variables from page scripts.
     e.g.: const fullPriceData = [...]; or let fullPriceData = [...];
     """
-    pattern = rf"(?:const|let|var)\s+{re.escape(var_name)}\s*=\s*(\[\s*\{{.*?\}\]\s*);"
+    pattern = r"(?:const|let|var)\s+" + re.escape(var_name) + r"\s*=\s*(\[\s*\{.*?\}\]\s*);"
     match = re.search(pattern, html_text, re.DOTALL)
     if match:
         try:
@@ -85,7 +85,7 @@ def generate_usd_chart(aed_irr_data, aed_usd_data, output_file="usd_chart.png", 
     plt.style.use("seaborn-v0_8-whitegrid" if "seaborn-v0_8-whitegrid" in plt.style.available else "default")
     fig, ax = plt.subplots(figsize=(11, 5), dpi=150)
 
-    # Plot line and gradient fill
+    # Plot line and fill area
     ax.plot(chart_dates, usd_toman_prices, color="#2563eb", linewidth=2.2, label="USD / Toman")
     ax.fill_between(chart_dates, usd_toman_prices, color="#3b82f6", alpha=0.15)
 
