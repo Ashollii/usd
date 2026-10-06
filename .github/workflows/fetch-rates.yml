@@ -79,3 +79,4 @@ jobs:
             git commit -m "chore(auto): update rates, API history and chart [skip ci]"
             git push
           fi
+Enable workflow
